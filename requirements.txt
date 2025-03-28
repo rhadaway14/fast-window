@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+couchbase
+gunicorn
+httpx
+pydantic
+pydantic
+prometheus-fastapi-instrumentator
