@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Deploy a VPC with a public subnet, security group, test EC2 instances (TEST-SERVER),
+  and Couchbase EC2 instances (CB-SERVER). Each group has customizable count, instance type, and AMI.
+  Installs Apache Benchmark + wrk on test servers, and Couchbase on DB nodes.
+
+Parameters:
+  VpcPrefix:
+    Type: String
+    Default: citi
+    Description: Prefix for VPC and resource names (e.g., citi-vpc)
+
+  TestInstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+    Description: EC2 instance type for test servers
+
+  CouchbaseInstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+    Description: EC2 instance type for Couchbase servers
+
+  TestInstanceCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10
+    Description: Number of test servers to launch
+
+  CouchbaseInstanceCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10
+    Description: Number of Couchbase nodes to launch
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 KeyPair for SSH
+
+  TestImageId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-0100e595e1cc1ff7f
+    Description: AMI ID for test servers (Amazon Linux 2023)
+
+  CouchbaseImageId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-0100e595e1cc1ff7f
+    Description: AMI ID for Couchbase servers (Amazon Linux 2023)
+
+Resources:
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcPrefix}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcPrefix}-igw"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcPrefix}-subnet"
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcPrefix}-routeTable"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref RouteTable
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: All
+      GroupDescription: Allow all traffic
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${VpcPrefix}-sg"
+
+  TestLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${VpcPrefix}-test-template"
+      LaunchTemplateData:
+        ImageId: !Ref TestImageId
+        InstanceType: !Ref TestInstanceType
+        KeyName: !Ref KeyName
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: true
+            DeviceIndex: 0
+            Groups: [ !Ref SecurityGroup ]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            dnf update -y
+            dnf install -y gcc make git perl openssl-devel httpd-tools
+            git clone https://github.com/wg/wrk.git /opt/wrk
+            cd /opt/wrk
+            make
+            cp wrk /usr/local/bin/
+            echo "wrk installed"
+            wrk --version || echo "wrk installed, version not shown"
+
+  CouchbaseLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${VpcPrefix}-cb-template"
+      LaunchTemplateData:
+        ImageId: !Ref CouchbaseImageId
+        InstanceType: !Ref CouchbaseInstanceType
+        KeyName: !Ref KeyName
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: true
+            DeviceIndex: 0
+            Groups: [ !Ref SecurityGroup ]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            yum install -y python3 bzip2
+            wget https://packages.couchbase.com/releases/7.6.1/couchbase-server-enterprise-7.6.1-linux.x86_64.rpm
+            yum install -y couchbase-server-enterprise-7.6.1-linux.x86_64.rpm
+
+  TestAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: [ !Ref PublicSubnet ]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref TestLaunchTemplate
+        Version: !GetAtt TestLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 1
+      DesiredCapacity: !Ref TestInstanceCount
+      Tags:
+        - Key: Name
+          Value: "TEST-SERVER"
+          PropagateAtLaunch: true
+
+  CouchbaseAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: [ !Ref PublicSubnet ]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CouchbaseLaunchTemplate
+        Version: !GetAtt CouchbaseLaunchTemplate.LatestVersionNumber
+      MinSize: !Ref CouchbaseInstanceCount
+      MaxSize: !Ref CouchbaseInstanceCount
+      DesiredCapacity: !Ref CouchbaseInstanceCount
+      Tags:
+        - Key: Name
+          Value: "CB-SERVER"
+          PropagateAtLaunch: true
+
+Outputs:
+  VPCId:
+    Value: !Ref VPC
+  SubnetId:
+    Value: !Ref PublicSubnet
+  SecurityGroupId:
+    Value: !Ref SecurityGroup
