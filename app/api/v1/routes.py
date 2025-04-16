@@ -26,27 +26,22 @@ async def perf_test_transaction(user_id: str, transaction_id: str):
     collection = await get_async_collection()
 
     try:
-        # Read 1
         key1 = f"user::{user_id}::trans::{transaction_id}"
         doc1 = await collection.get(key1)
         data1 = doc1.content_as[dict]
 
-        # Read 2 - depends on doc1
-        key2 = data1.get("next_key") or key1  # fallback in case the key is missing
+        key2 = data1.get("next_key") or key1
         doc2 = await collection.get(key2)
         data2 = doc2.content_as[dict]
 
-        # Read 3 - depends on doc2
         key3 = data2.get("next_key") or key2
         doc3 = await collection.get(key3)
         data3 = doc3.content_as[dict]
 
-        # Read 4 - depends on doc3
         key4 = data3.get("next_key") or key3
         doc4 = await collection.get(key4)
         data4 = doc4.content_as[dict]
 
-        # Final write - based on data4
         final_key = f"user::{user_id}::final::{transaction_id}"
         await collection.upsert(final_key, {"summary": data4})
 

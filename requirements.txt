@@ -5,5 +5,4 @@ couchbase
 gunicorn
 httpx
 pydantic
-pydantic
 prometheus-fastapi-instrumentator

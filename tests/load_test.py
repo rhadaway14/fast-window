@@ -52,12 +52,10 @@ async def main():
     print(f"✅ Avg write time: {avg_write * 1000:.2f} ms")
 
 
-
     print(f"Starting {NUM_REQUESTS} concurrent reads...")
     read_times = await asyncio.gather(*[get_transaction(txn_id) for txn_id in transaction_ids])
     avg_read = sum(read_times) / len(read_times)
     print(f"✅ Avg read time: {avg_read * 1000:.2f} ms")
-
 
 
     print(f"Starting {NUM_REQUESTS} concurrent deletes...")
